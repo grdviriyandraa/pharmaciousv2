@@ -18,37 +18,33 @@ apel, mangga, jeruk, delima, dll., **tanpa manggis** → negatif yang pas). Kamu
 
 ---
 
-## Sel yang dijalankan di Colab (setelah pipeline utama sampai sel 9 sudah pernah jalan)
+## Sel yang dijalankan di Colab
 
 ### R1 — download negatif dari Kaggle + sebar ke kelas `bukan_manggis`
+**TARUH sel ini sebagai sel BARU tepat setelah sel 5 (Crop bbox → ImageFolder), SEBELUM sel 6.**
+Sel 5 membuat folder `CLF_DIR/{train,valid,test}/`; negatif harus masuk sebelum sel 6 membaca
+folder & menentukan jumlah kelas.
+
 ```python
 # === R1. Ambil negatif dari Kaggle + sebar ke ImageFolder ===
-import os, glob, random, shutil
+import kagglehub, os, glob, random, shutil
 random.seed(42)
 
-# --- isi kredensial Kaggle (dari kaggle.json) ---
-os.environ["KAGGLE_USERNAME"] = "USERNAME_KAGGLE_KAMU"
-os.environ["KAGGLE_KEY"]      = "API_KEY_KAMU"
-# (alternatif: simpan di Colab Secrets 🔑 lalu:
-#  from google.colab import userdata
-#  os.environ["KAGGLE_USERNAME"]=userdata.get("KAGGLE_USERNAME"); os.environ["KAGGLE_KEY"]=userdata.get("KAGGLE_KEY"))
-
-!pip -q install kagglehub
-import kagglehub
+# Download latest version
 path = kagglehub.dataset_download("kritikseth/fruit-and-vegetable-image-recognition")
+print("Path to dataset files:", path)
+# Kalau diminta login: jalankan kagglehub.login() sekali (username + key dari kaggle.json).
 
-# semua gambar dataset = negatif (pastikan tak ada 'mangosteen')
+# semua gambar dataset ini = negatif "bukan_manggis"
 neg = [f for f in glob.glob(f"{path}/**/*.*", recursive=True)
        if f.lower().endswith((".jpg", ".jpeg", ".png")) and "mangosteen" not in f.lower()]
 random.shuffle(neg)
 print("negatif tersedia:", len(neg))
-assert len(neg) >= 200, "Dataset kosong? cek kredensial Kaggle."
+assert len(neg) >= 200, "Dataset kosong? cek autentikasi Kaggle (kagglehub.login())."
 
-# sebar ke split yang sudah ada (train + EVAL_SPLIT dari sel 6). 85% train.
+eval_split = "test" if os.path.isdir(f"{CLF_DIR}/test") else "valid"
 n_train = int(len(neg) * 0.85)
-buckets = {"train": neg[:n_train]}
-if EVAL_SPLIT != "train":
-    buckets[EVAL_SPLIT] = neg[n_train:]
+buckets = {"train": neg[:n_train], eval_split: neg[n_train:]}
 for split, files in buckets.items():
     dst = f"{CLF_DIR}/{split}/bukan_manggis"
     os.makedirs(dst, exist_ok=True)
@@ -59,17 +55,36 @@ for split, files in buckets.items():
 print("OK. Sekarang JALANKAN ULANG sel 6 → 7/8 → 9, lalu export (R2).")
 ```
 
-> **Catatan keseimbangan:** dataset manggis besar (~50k train), negatif ~3.800. Timpang,
-> tapi `class weights` di sel 8 (otomatis, ∝ 1/frekuensi) meng-upweight `bukan_manggis`
-> ~5×, cukup untuk menolak objek yang jelas bukan manggis. Kalau reject kurang tajam,
-> tambah dataset negatif kedua (ulangi R1 dgn slug Kaggle lain, mis. objek/tangan).
+### R1b — WAJIB: seimbangkan sampling (kalau tidak, model COLLAPSE)
+> ⚠️ **Pelajaran dari percobaan pertama:** manggis ~50k vs negatif ~3.800 sangat timpang.
+> `class weights` bawaan sel 8 meng-upweight `bukan_manggis` ~4–5×, dan itu membuat model
+> **collapse** — SEMUA gambar (termasuk foto manggis asli) diprediksi `bukan_manggis` ~100%.
+> Wajib ganti ke **WeightedRandomSampler** (seimbangkan lewat sampling, bukan bobot loss).
 
-### Setelah R1: re-run sel pipeline yang sudah ada
-Tidak ada perubahan kode — notebook otomatis jadi 3 kelas (ImageFolder mendeteksi folder baru,
-`len(CLASSES)` jadi 3, head model & class-weights ikut menyesuaikan):
-1. **Sel 6** (transforms + dataloaders) — `CLASSES` jadi `['Ripe','Un_Ripe','bukan_manggis']`.
-2. **Sel 7/8** (model) — head otomatis 3 output.
+**Ganti baris `train_dl=...` di sel 6** dengan:
+```python
+import numpy as np
+from torch.utils.data import WeightedRandomSampler
+_targets = [y for _, y in train_ds.samples]
+_cw = 1.0 / np.bincount(_targets)                     # bobot per kelas
+_sw = [_cw[t] for t in _targets]                      # bobot per sampel
+_sampler = WeightedRandomSampler(_sw, num_samples=len(_sw), replacement=True)
+train_dl = DataLoader(train_ds, batch_size=BATCH_SIZE, sampler=_sampler, num_workers=2)
+```
+**Dan di sel 8**, pakai loss TANPA class weight (karena sampler sudah menyeimbangkan):
+```python
+criterion = nn.CrossEntropyLoss()   # bukan CrossEntropyLoss(weight=w)
+```
+Naikkan `EPOCHS` sedikit (mis. 15) karena 3 kelas lebih sulit.
+
+### Setelah R1 + R1b: re-run pipeline
+1. **Sel 6** (dgn WeightedRandomSampler) — `CLASSES` jadi `['Ripe','Un_Ripe','bukan_manggis']`.
+2. **Sel 7/8** (model + loss polos) — head otomatis 3 output.
 3. **Sel 9** (training) — latih ulang.
+
+> **Verifikasi sebelum pakai:** setelah export, uji beberapa foto manggis ASLI. Kalau masih
+> banyak yang terbaca `bukan_manggis`, kurangi negatif (cap ~2.000) atau tambah epoch.
+> Kirim `.onnx`-nya ke Claude untuk dites otomatis dgn foto di `public/samples/`.
 
 ### R2 — export ONNX (sama seperti versi CAM, otomatis 3 output)
 ```python

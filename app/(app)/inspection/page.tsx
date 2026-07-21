@@ -37,10 +37,10 @@ function liveVerdict(live: LiveResult | null): { key: VerdictKey; sub: string } 
 // Contoh siap-pakai (taruh file di public/samples/ — lihat public/samples/README.md).
 // Thumbnail yang filenya belum ada otomatis disembunyikan.
 const SAMPLES = [
-  { src: "/samples/manggis-1.jpg", label: "Contoh 1" },
-  { src: "/samples/manggis-2.jpg", label: "Contoh 2" },
-  { src: "/samples/manggis-3.jpg", label: "Contoh 3" },
-  { src: "/samples/manggis-4.jpg", label: "Contoh 4" },
+  { src: "/samples/manggis-1.png", label: "Contoh 1" },
+  { src: "/samples/manggis-2.png", label: "Contoh 2" },
+  { src: "/samples/manggis-3.png", label: "Contoh 3" },
+  { src: "/samples/manggis-4.png", label: "Contoh 4" },
 ];
 
 export default function InspectionPage() {
@@ -115,6 +115,16 @@ export default function InspectionPage() {
 
   // Matikan kamera saat komponen dilepas (jangan tinggalkan lampu kamera menyala).
   useEffect(() => () => stopStream(), []);
+
+  // Deteksi file contoh yang benar-benar ada. `onload` di-set SEBELUM src → tetap
+  // fire walau gambar sudah ter-cache (kalau pakai <img> React, event bisa terlewat).
+  useEffect(() => {
+    SAMPLES.forEach((s) => {
+      const img = new Image();
+      img.onload = () => setLoadedSamples((prev) => (prev.has(s.src) ? prev : new Set(prev).add(s.src)));
+      img.src = s.src;
+    });
+  }, []);
 
   function stopStream() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -328,19 +338,6 @@ export default function InspectionPage() {
               {loading ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
               {loading ? "Menganalisis…" : "Jalankan analisis"}
             </Button>
-          </div>
-
-          {/* preloader tersembunyi — deteksi file contoh yang benar-benar ada */}
-          <div className="hidden" aria-hidden>
-            {SAMPLES.map((s) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={s.src}
-                src={s.src}
-                alt=""
-                onLoad={() => setLoadedSamples((prev) => new Set(prev).add(s.src))}
-              />
-            ))}
           </div>
 
           {/* Coba contoh — hanya muncul kalau ada file di public/samples/ */}
