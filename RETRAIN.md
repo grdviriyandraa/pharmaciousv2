@@ -7,70 +7,62 @@ terbaca "Ripe 100%". Caranya: latih ulang jadi **3 kelas** (`Ripe`, `Un_Ripe`, `
 > hasil snapshot). Begitu model 3-kelas ditaruh di `public/model/mangosteen_grader.onnx`,
 > langsung aktif tanpa ubah kode.
 
-## Yang aku butuh dari kamu: gambar negatif
-Kumpulkan **±300–1500 gambar yang BUKAN kulit manggis** — makin beragam makin bagus:
-apel, jeruk, buah bulat lain, tangan, latar meja/kertas, objek acak. (Sertakan buah lain
-yang mirip supaya model belajar bedanya.) Taruh semuanya di folder Colab `/content/negatives_raw/`.
+## Yang aku butuh dari kamu: API token Kaggle
+Negatif diambil OTOMATIS dari dataset publik Kaggle
+**`kritikseth/fruit-and-vegetable-image-recognition`** (3.825 gambar, 36 kelas buah/sayur —
+apel, mangga, jeruk, delima, dll., **tanpa manggis** → negatif yang pas). Kamu cukup punya:
 
-Dua cara mengisinya ada di sel **R1b** di bawah.
+1. Akun Kaggle (gratis).
+2. **API token**: kaggle.com → foto profil → **Settings** → bagian **API** →
+   **Create New Token** → mengunduh `kaggle.json` berisi `username` dan `key`.
 
 ---
 
 ## Sel yang dijalankan di Colab (setelah pipeline utama sampai sel 9 sudah pernah jalan)
 
-### R1 — distribusikan negatif ke ImageFolder
+### R1 — download negatif dari Kaggle + sebar ke kelas `bukan_manggis`
 ```python
-# === R1. Tambah kelas "bukan_manggis" ke ImageFolder ===
+# === R1. Ambil negatif dari Kaggle + sebar ke ImageFolder ===
 import os, glob, random, shutil
 random.seed(42)
 
-NEG_RAW = "/content/negatives_raw"   # taruh gambar negatif di sini (lihat R1b)
-os.makedirs(NEG_RAW, exist_ok=True)
+# --- isi kredensial Kaggle (dari kaggle.json) ---
+os.environ["KAGGLE_USERNAME"] = "USERNAME_KAGGLE_KAMU"
+os.environ["KAGGLE_KEY"]      = "API_KEY_KAMU"
+# (alternatif: simpan di Colab Secrets 🔑 lalu:
+#  from google.colab import userdata
+#  os.environ["KAGGLE_USERNAME"]=userdata.get("KAGGLE_USERNAME"); os.environ["KAGGLE_KEY"]=userdata.get("KAGGLE_KEY"))
 
-exts = ("*.jpg","*.jpeg","*.png","*.bmp","*.webp","*.JPG","*.PNG")
-neg = []
-for e in exts:
-    neg += glob.glob(f"{NEG_RAW}/**/{e}", recursive=True)
+!pip -q install kagglehub
+import kagglehub
+path = kagglehub.dataset_download("kritikseth/fruit-and-vegetable-image-recognition")
+
+# semua gambar dataset = negatif (pastikan tak ada 'mangosteen')
+neg = [f for f in glob.glob(f"{path}/**/*.*", recursive=True)
+       if f.lower().endswith((".jpg", ".jpeg", ".png")) and "mangosteen" not in f.lower()]
 random.shuffle(neg)
-assert len(neg) >= 50, f"Baru {len(neg)} gambar negatif di {NEG_RAW}. Tambah dulu (sel R1b)."
+print("negatif tersedia:", len(neg))
+assert len(neg) >= 200, "Dataset kosong? cek kredensial Kaggle."
 
-# ikut split yang sudah ada: train + EVAL_SPLIT (dari sel 6). 85% train, sisanya eval.
+# sebar ke split yang sudah ada (train + EVAL_SPLIT dari sel 6). 85% train.
 n_train = int(len(neg) * 0.85)
 buckets = {"train": neg[:n_train]}
 if EVAL_SPLIT != "train":
     buckets[EVAL_SPLIT] = neg[n_train:]
-
 for split, files in buckets.items():
     dst = f"{CLF_DIR}/{split}/bukan_manggis"
     os.makedirs(dst, exist_ok=True)
     for i, f in enumerate(files):
-        ext = os.path.splitext(f)[1].lower() or ".jpg"
-        shutil.copy(f, f"{dst}/neg_{i:05d}{ext}")
+        shutil.copy(f, f"{dst}/neg_{i:05d}.jpg")
     print(f"{split}/bukan_manggis: {len(files)} gambar")
 
 print("OK. Sekarang JALANKAN ULANG sel 6 → 7/8 → 9, lalu export (R2).")
 ```
 
-### R1b — cara mengisi `/content/negatives_raw/` (pilih salah satu)
-```python
-# --- Opsi A: upload zip berisi gambar, lalu unzip ---
-# from google.colab import files; up = files.upload()  # pilih negatives.zip
-# import zipfile, os
-# for name in up:
-#     if name.endswith(".zip"):
-#         zipfile.ZipFile(name).extractall("/content/negatives_raw")
-# print("unzipped")
-
-# --- Opsi B: dataset buah publik via kagglehub (buang yang mangosteen) ---
-# !pip -q install kagglehub
-# import kagglehub, glob, shutil, os
-# p = kagglehub.dataset_download("kritikseth/fruit-and-vegetable-image-recognition")
-# src = [f for f in glob.glob(f"{p}/**/*.*", recursive=True)
-#        if f.lower().endswith((".jpg",".jpeg",".png")) and "mangosteen" not in f.lower()]
-# os.makedirs("/content/negatives_raw", exist_ok=True)
-# for i, f in enumerate(src[:1200]): shutil.copy(f, f"/content/negatives_raw/n_{i}.jpg")
-# print(len(src[:1200]), "negatif disiapkan")
-```
+> **Catatan keseimbangan:** dataset manggis besar (~50k train), negatif ~3.800. Timpang,
+> tapi `class weights` di sel 8 (otomatis, ∝ 1/frekuensi) meng-upweight `bukan_manggis`
+> ~5×, cukup untuk menolak objek yang jelas bukan manggis. Kalau reject kurang tajam,
+> tambah dataset negatif kedua (ulangi R1 dgn slug Kaggle lain, mis. objek/tangan).
 
 ### Setelah R1: re-run sel pipeline yang sudah ada
 Tidak ada perubahan kode — notebook otomatis jadi 3 kelas (ImageFolder mendeteksi folder baru,
