@@ -23,14 +23,19 @@ const MODEL_URL = "/model/mangosteen_grader.onnx";
 // ORT dimuat runtime dari /ort/ (di-copy oleh scripts/copy-ort-wasm.mjs), BUKAN
 // di-bundle webpack — bundle ort menyeret build Node-nya dan mematahkan `next build`.
 const ORT_BUNDLE_URL = "/ort/ort.wasm.bundle.min.mjs";
-// Urutan kelas = ImageFolder (alfabetis) di notebook: ["Ripe", "Un_Ripe"].
-const CLASSES = ["Ripe", "Un_Ripe"] as const;
+// Urutan kelas = ImageFolder (alfabetis Python: huruf besar dulu) di notebook.
+// Model 2-kelas sekarang: ["Ripe","Un_Ripe"]. Setelah retrain + kelas reject:
+// ["Ripe","Un_Ripe","bukan_manggis"] (indeks 0/1 tetap, reject = indeks 2).
+// Menyertakan kelas ketiga di sini aman utk model 2-output (argmax tak pernah 2).
+const CLASSES = ["Ripe", "Un_Ripe", "bukan_manggis"] as const;
+const NOT_MANGOSTEEN = "bukan_manggis";
 const SIZE = 224;
 const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
 
 export type OnDeviceResult = InferenceResult & {
   gate: { decision: GateDecision; reason: string };
+  notMangosteen?: boolean; // true kalau model (3-kelas) memprediksi "bukan_manggis"
 };
 
 type OrtModule = typeof import("onnxruntime-web");
@@ -117,6 +122,7 @@ export type LiveResult = {
   confidence: number;
   decision: GateDecision;
   reason: string;
+  notMangosteen: boolean;
 };
 
 /**
@@ -142,7 +148,13 @@ export async function classifyFrame(source: DrawSource): Promise<LiveResult | nu
     cvConfidence: confidence,
     nirMarker: null,
   });
-  return { grade, confidence, decision: gate.decision, reason: gate.reason };
+  return {
+    grade,
+    confidence,
+    decision: gate.decision,
+    reason: gate.reason,
+    notMangosteen: grade === NOT_MANGOSTEEN,
+  };
 }
 
 /**
@@ -254,5 +266,6 @@ export async function analyzeOnDevice(imageDataUrl: string): Promise<OnDeviceRes
     recommendation: recommendationFor(gate.decision),
     modelSource,
     gate,
+    notMangosteen: grade === NOT_MANGOSTEEN,
   };
 }

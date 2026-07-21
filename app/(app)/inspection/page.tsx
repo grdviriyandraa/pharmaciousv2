@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, Camera, Sparkles, RefreshCw, FlaskConical, Cpu, Save, CheckCircle2, ArrowRight, Flame } from "lucide-react";
+import { Upload, Camera, Sparkles, RefreshCw, FlaskConical, Cpu, Save, CheckCircle2, ArrowRight, Flame, ScanSearch } from "lucide-react";
 import { Button, Card, GateBadge } from "@/components/ui";
 import { ConfidenceGauge } from "@/components/confidence-gauge";
 import { analyzeOnDevice, classifyFrame, getModelStatus, type OnDeviceResult, type LiveResult } from "@/lib/inference-onnx";
@@ -14,10 +14,11 @@ type SavedBatch = { id: string; supplierName: string };
 // Ambang di bawah ini dianggap "objek belum jelas / bukan manggis" → zona netral.
 const LIVE_MIN_CONFIDENCE = 0.6;
 
-type VerdictKey = "scan" | "aim" | "accept" | "route" | "reject";
+type VerdictKey = "scan" | "aim" | "notfruit" | "accept" | "route" | "reject";
 const VERDICT_STYLE: Record<VerdictKey, { ring: string; badge: string; label: string }> = {
   scan: { ring: "ring-white/40", badge: "bg-ink/75 text-white", label: "Memindai…" },
   aim: { ring: "ring-white/50", badge: "bg-ink/75 text-white", label: "Arahkan ke buah" },
+  notfruit: { ring: "ring-slate-400", badge: "bg-slate-600 text-white", label: "BUKAN MANGGIS" },
   accept: { ring: "ring-accept", badge: "bg-accept text-white", label: "TERIMA" },
   route: { ring: "ring-route", badge: "bg-route text-white", label: "CEK NIR" },
   reject: { ring: "ring-reject", badge: "bg-reject text-white", label: "TOLAK" },
@@ -26,6 +27,7 @@ const VERDICT_STYLE: Record<VerdictKey, { ring: string; badge: string; label: st
 function liveVerdict(live: LiveResult | null): { key: VerdictKey; sub: string } {
   if (!live) return { key: "scan", sub: "" };
   const pct = `${(live.confidence * 100).toFixed(0)}%`;
+  if (live.notMangosteen) return { key: "notfruit", sub: "arahkan ke kulit manggis" };
   if (live.confidence < LIVE_MIN_CONFIDENCE) return { key: "aim", sub: "objek belum jelas" };
   if (live.decision === "accept") return { key: "accept", sub: `Ripe · ${pct}` };
   if (live.decision === "reject") return { key: "reject", sub: `${live.grade} · ${pct}` };
@@ -402,6 +404,19 @@ export default function InspectionPage() {
               </motion.div>
             ) : result ? (
               <motion.div key="r" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
+                {result.notMangosteen ? (
+                  <div className="space-y-3 rounded-xl border border-slate-300 bg-slate-50 p-6 text-center">
+                    <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-200 text-slate-600">
+                      <ScanSearch size={24} />
+                    </div>
+                    <div className="font-display text-lg font-semibold text-slate-700">Bukan kulit manggis</div>
+                    <p className="text-sm text-muted">
+                      Objek pada citra terdeteksi bukan perikarp manggis, jadi gerbang mutu tidak
+                      dijalankan dan batch tidak dicatat. Arahkan ke kulit manggis lalu ulangi.
+                    </p>
+                  </div>
+                ) : (
+                  <>
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="eyebrow">Grade kematangan</div>
@@ -496,6 +511,8 @@ export default function InspectionPage() {
                   NIR/HPLC tetap menentukan. Gambar tidak disimpan (hanya grade &amp; keyakinan
                   dicatat).
                 </p>
+                  </>
+                )}
               </motion.div>
             ) : (
               <motion.div key="e" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid place-items-center py-16 text-center text-sm text-muted">
