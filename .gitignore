@@ -1,0 +1,11 @@
+/node_modules
+/.next
+/out
+*.db
+*.db-journal
+.env
+.env.local
+.DS_Store
+
+# Runtime ONNX wasm — di-generate ulang oleh postinstall (scripts/copy-ort-wasm.mjs)
+/public/ort
