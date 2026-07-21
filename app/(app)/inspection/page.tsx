@@ -6,10 +6,31 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Upload, Camera, Sparkles, RefreshCw, FlaskConical, Cpu, Save, CheckCircle2, ArrowRight, Flame } from "lucide-react";
 import { Button, Card, GateBadge } from "@/components/ui";
 import { ConfidenceGauge } from "@/components/confidence-gauge";
-import { analyzeOnDevice, getModelStatus, type OnDeviceResult } from "@/lib/inference-onnx";
+import { analyzeOnDevice, classifyFrame, getModelStatus, type OnDeviceResult, type LiveResult } from "@/lib/inference-onnx";
 
 type SupplierOption = { id: string; name: string };
 type SavedBatch = { id: string; supplierName: string };
+
+// Ambang di bawah ini dianggap "objek belum jelas / bukan manggis" → zona netral.
+const LIVE_MIN_CONFIDENCE = 0.6;
+
+type VerdictKey = "scan" | "aim" | "accept" | "route" | "reject";
+const VERDICT_STYLE: Record<VerdictKey, { ring: string; badge: string; label: string }> = {
+  scan: { ring: "ring-white/40", badge: "bg-ink/75 text-white", label: "Memindai…" },
+  aim: { ring: "ring-white/50", badge: "bg-ink/75 text-white", label: "Arahkan ke buah" },
+  accept: { ring: "ring-accept", badge: "bg-accept text-white", label: "TERIMA" },
+  route: { ring: "ring-route", badge: "bg-route text-white", label: "CEK NIR" },
+  reject: { ring: "ring-reject", badge: "bg-reject text-white", label: "TOLAK" },
+};
+
+function liveVerdict(live: LiveResult | null): { key: VerdictKey; sub: string } {
+  if (!live) return { key: "scan", sub: "" };
+  const pct = `${(live.confidence * 100).toFixed(0)}%`;
+  if (live.confidence < LIVE_MIN_CONFIDENCE) return { key: "aim", sub: "objek belum jelas" };
+  if (live.decision === "accept") return { key: "accept", sub: `Ripe · ${pct}` };
+  if (live.decision === "reject") return { key: "reject", sub: `${live.grade} · ${pct}` };
+  return { key: "route", sub: `keyakinan ${pct}` };
+}
 
 // Contoh siap-pakai (taruh file di public/samples/ — lihat public/samples/README.md).
 // Thumbnail yang filenya belum ada otomatis disembunyikan.
@@ -29,6 +50,7 @@ export default function InspectionPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [camOn, setCamOn] = useState(false);
+  const [live, setLive] = useState<LiveResult | null>(null);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [loadedSamples, setLoadedSamples] = useState<Set<string>>(new Set());
   const samples = SAMPLES.filter((s) => loadedSamples.has(s.src));
@@ -59,6 +81,34 @@ export default function InspectionPage() {
       videoRef.current.srcObject = streamRef.current;
       videoRef.current.play().catch(() => {});
     }
+  }, [camOn]);
+
+  // Loop inferensi real-time selama kamera hidup: klasifikasi frame berkala →
+  // update verdict live (hijau/kuning/merah). Guard `busy` supaya tak menumpuk.
+  useEffect(() => {
+    if (!camOn) {
+      setLive(null);
+      return;
+    }
+    let active = true;
+    let busy = false;
+    const id = setInterval(async () => {
+      const v = videoRef.current;
+      if (busy || !v || !v.videoWidth) return;
+      busy = true;
+      try {
+        const r = await classifyFrame(v);
+        if (active) setLive(r);
+      } catch {
+        /* frame gagal — abaikan, coba lagi siklus berikutnya */
+      } finally {
+        busy = false;
+      }
+    }, 350);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
   }, [camOn]);
 
   // Matikan kamera saat komponen dilepas (jangan tinggalkan lampu kamera menyala).
@@ -174,7 +224,52 @@ export default function InspectionPage() {
         <div className="p-5">
           <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border border-hairline bg-bg">
             {camOn ? (
-              <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
+              (() => {
+                const v = liveVerdict(live);
+                const s = VERDICT_STYLE[v.key];
+                return (
+                  <>
+                    <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
+
+                    {/* grid rule-of-thirds + kotak fokus */}
+                    <svg
+                      className="pointer-events-none absolute inset-0 h-full w-full"
+                      viewBox="0 0 100 100"
+                      preserveAspectRatio="none"
+                    >
+                      <line x1="33.33" y1="0" x2="33.33" y2="100" stroke="white" strokeOpacity="0.22" strokeWidth="0.25" />
+                      <line x1="66.66" y1="0" x2="66.66" y2="100" stroke="white" strokeOpacity="0.22" strokeWidth="0.25" />
+                      <line x1="0" y1="33.33" x2="100" y2="33.33" stroke="white" strokeOpacity="0.22" strokeWidth="0.25" />
+                      <line x1="0" y1="66.66" x2="100" y2="66.66" stroke="white" strokeOpacity="0.22" strokeWidth="0.25" />
+                      <rect x="26" y="18" width="48" height="64" fill="none" stroke="white" strokeOpacity="0.45" strokeWidth="0.5" rx="3" />
+                    </svg>
+
+                    {/* border warna verdict (lampu lalu lintas) */}
+                    <div className={`pointer-events-none absolute inset-0 rounded-xl ring-4 ring-inset transition-colors ${s.ring}`} />
+
+                    {/* badge verdict besar di atas */}
+                    <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2">
+                      <div className={`flex items-center gap-2 rounded-full px-4 py-1.5 font-display text-sm font-bold shadow-lg backdrop-blur ${s.badge}`}>
+                        <span className="h-2 w-2 rounded-full bg-white/90" />
+                        {s.label}
+                        {v.sub && <span className="font-mono text-[11px] font-medium opacity-90">· {v.sub}</span>}
+                      </div>
+                    </div>
+
+                    {/* persentase live besar di kiri bawah */}
+                    <div className="pointer-events-none absolute bottom-2 left-2 rounded-lg bg-ink/70 px-2.5 py-1.5 font-mono text-white backdrop-blur">
+                      <span className="text-lg font-bold tabular-nums">
+                        {live ? `${(live.confidence * 100).toFixed(0)}%` : "—"}
+                      </span>
+                      <span className="ml-1 text-[10px] opacity-70">keyakinan</span>
+                    </div>
+
+                    <span className="pointer-events-none absolute right-2 top-3 rounded-md bg-ink/70 px-2 py-1 font-mono text-[10px] text-white">
+                      LIVE ● real-time
+                    </span>
+                  </>
+                );
+              })()
             ) : image ? (
               <>
                 {/* image + peta aktivasi model (overlay dari feature-map konv terakhir) */}

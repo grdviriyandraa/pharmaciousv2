@@ -79,20 +79,16 @@ function softmax(logits: Float32Array): number[] {
   return exps.map((v) => v / sum);
 }
 
-/** dataURL → tensor float32 NCHW [1,3,224,224], preprocessing identik training. */
-async function preprocess(imageDataUrl: string, ort: OrtModule) {
-  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const el = new Image();
-    el.onload = () => resolve(el);
-    el.onerror = () => reject(new Error("gambar tidak bisa dimuat"));
-    el.src = imageDataUrl;
-  });
+type DrawSource = HTMLImageElement | HTMLVideoElement | HTMLCanvasElement;
+
+/** Elemen gambar/video/canvas → tensor float32 NCHW [1,3,224,224], preprocessing identik training. */
+function sourceToTensor(source: DrawSource, ort: OrtModule) {
   const canvas = document.createElement("canvas");
   canvas.width = SIZE;
   canvas.height = SIZE;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("canvas 2d tidak tersedia");
-  ctx.drawImage(img, 0, 0, SIZE, SIZE); // squash, sama seperti transforms.Resize((224,224))
+  ctx.drawImage(source, 0, 0, SIZE, SIZE); // squash, sama seperti transforms.Resize((224,224))
   const { data } = ctx.getImageData(0, 0, SIZE, SIZE);
 
   const chw = new Float32Array(3 * SIZE * SIZE);
@@ -103,6 +99,50 @@ async function preprocess(imageDataUrl: string, ort: OrtModule) {
     }
   }
   return new ort.Tensor("float32", chw, [1, 3, SIZE, SIZE]);
+}
+
+/** dataURL → tensor (untuk analisis snapshot). */
+async function preprocess(imageDataUrl: string, ort: OrtModule) {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error("gambar tidak bisa dimuat"));
+    el.src = imageDataUrl;
+  });
+  return sourceToTensor(img, ort);
+}
+
+export type LiveResult = {
+  grade: string;
+  confidence: number;
+  decision: GateDecision;
+  reason: string;
+};
+
+/**
+ * Klasifikasi cepat SATU frame (mode kamera real-time). Tanpa heatmap → ringan
+ * untuk dijalankan berulang. Mengembalikan null kalau model asli belum terpasang
+ * (mode live butuh model asli, bukan mock).
+ */
+export async function classifyFrame(source: DrawSource): Promise<LiveResult | null> {
+  const loaded = await getSession();
+  if (!loaded) return null;
+  const { ort, session } = loaded;
+  const input = sourceToTensor(source, ort);
+  const outputs = await session.run({ [session.inputNames[0]]: input });
+  const logitsName = session.outputNames.includes("logits") ? "logits" : session.outputNames[0];
+  const logits = outputs[logitsName].data as Float32Array;
+  const probs = softmax(logits);
+  const idx = probs.indexOf(Math.max(...probs));
+  const grade = CLASSES[idx] ?? `class_${idx}`;
+  const confidence = Number(probs[idx].toFixed(3));
+  const gate = decideGate({
+    ingredient: "mangosteen",
+    cvGrade: grade,
+    cvConfidence: confidence,
+    nirMarker: null,
+  });
+  return { grade, confidence, decision: gate.decision, reason: gate.reason };
 }
 
 /**
