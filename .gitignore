@@ -9,3 +9,6 @@
 
 # Runtime ONNX wasm — di-generate ulang oleh postinstall (scripts/copy-ort-wasm.mjs)
 /public/ort
+
+# TypeScript incremental build cache
+*.tsbuildinfo
