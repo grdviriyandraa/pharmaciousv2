@@ -27,6 +27,7 @@ export default function InspectionPage() {
   const [modelStatus, setModelStatus] = useState<"onnx" | "mock" | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [camOn, setCamOn] = useState(false);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [loadedSamples, setLoadedSamples] = useState<Set<string>>(new Set());
@@ -51,6 +52,22 @@ export default function InspectionPage() {
       })
       .catch(() => {});
   }, []);
+
+  // Pasang stream SETELAH <video> ter-mount (baru muncul saat camOn true).
+  useEffect(() => {
+    if (camOn && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [camOn]);
+
+  // Matikan kamera saat komponen dilepas (jangan tinggalkan lampu kamera menyala).
+  useEffect(() => () => stopStream(), []);
+
+  function stopStream() {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  }
 
   function resetRecord() {
     setSaved(null);
@@ -104,28 +121,30 @@ export default function InspectionPage() {
   }
 
   async function startCamera() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert("Browser ini tidak mendukung kamera. Gunakan Unggah, atau buka lewat HTTPS.");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setCamOn(true);
-      }
+      streamRef.current = stream;
+      setCamOn(true); // mount <video> → effect di atas yang memasang stream
     } catch {
-      alert("Kamera tidak tersedia. Gunakan unggah gambar.");
+      alert("Tidak bisa mengakses kamera. Pastikan izin kamera diizinkan (situs harus HTTPS). Anda tetap bisa pakai Unggah.");
     }
   }
 
   function capture() {
     const v = videoRef.current;
-    if (!v) return;
+    if (!v || !v.videoWidth) return;
     const canvas = document.createElement("canvas");
     canvas.width = v.videoWidth;
     canvas.height = v.videoHeight;
     canvas.getContext("2d")?.drawImage(v, 0, 0);
     setImage(canvas.toDataURL("image/jpeg"));
     setResult(null);
-    (v.srcObject as MediaStream)?.getTracks().forEach((t) => t.stop());
+    resetRecord();
+    stopStream();
     setCamOn(false);
   }
 
